@@ -1,4 +1,5 @@
 import { Telegraf } from "telegraf";
+import { BotException, ClientMessage, ExceptionName } from "./error";
 
 const bot = new Telegraf("1601399988:AAETMLNaYjX-ubOURdvF5IOUPg0yHMHseow");
 
@@ -13,11 +14,21 @@ let equity: number = -1;
 let risk: number = 0.01;
 let ratio: number = -1;
 
+bot.command("start", (ctx) => {
+  ctx.reply(
+    "Hi! Please set your equity and risk first.\n\n" +
+      "/equity [YOUR EQUITY]\n" +
+      "/risk [YOUR RISK(%)]\n\n" +
+      "Then, send your signal in one of the following formats:\n"
+  );
+  ctx.reply(formSignalCorrectFormatMessage());
+});
+
 bot.command("help", (ctx) => {
   ctx.reply(
-    "/equity Setting your equity.\n" +
-      "/risk Setting your risk%.\n" +
-      "/ratio Setting conversion ratio"
+    "/equity [YOUR EQUITY] - Setting your equity.\n" +
+      "/risk [YOUR RISK(%)] - Setting your risk%.\n" +
+      "/ratio [CONVERSION RATIO] - Setting conversion ratio"
   );
 });
 
@@ -72,43 +83,89 @@ bot.command("risk", (ctx) => {
     }
   }
 });
-
+// Signal Processing
 bot.on("text", (ctx) => {
-  let lines = ctx.message.text.split("\n");
-  lines = lines.filter((line) => {
-    return line !== "";
-  });
-  //ctxObj = ctx;
+  try {
+    let lines = ctx.message.text.split("\n");
+    lines = lines
+      .filter((line) => {
+        return line !== "";
+      })
+      .map((line, index) => line.trim());
+    //ctxObj = ctx;
 
-  //const numLines = lines.length;
-  const headLineWords = lines[0].replace(/  +/g, " ").split(" ");
-  const symbol = headLineWords[0].toLowerCase();
-  const operation = headLineWords[1];
-  const price = parseFloat(headLineWords[2]);
-
-  const tps: Array<number> = [];
-  let sl: number = -1;
-
-  lines.forEach((line, index) => {
-    if (index === 0) return;
-    if (line.toLowerCase().includes("tp")) {
-      tps.push(getSLAndTPFromLine(line));
-    } else if (
-      line.toLowerCase().includes("sl") ||
-      line.toLowerCase().includes("stop")
-    ) {
-      sl = getSLAndTPFromLine(line);
+    const headLineWords = lines[0].replace(/  +/g, " ").split(" ");
+    if (headLineWords.length !== 3) {
+      throw new BotException(
+        "parser_001",
+        ExceptionName.InvalidSignalFormat,
+        ClientMessage.InvalidSignal
+      );
     }
-  });
+    const symbol = headLineWords[0].toLowerCase();
 
-  ctx.reply(
-    `${formSummaryMessage(symbol, operation, price, tps, sl)}` +
-      `==========\n` +
-      `${formPropMessage()}` +
-      `==========\n` +
-      `${formPositionSizingMessage(symbol, price, sl, tps)}`
-  );
-  ratio = -1;
+    const operation = headLineWords[1].toLowerCase();
+    if (operation !== "buy" && operation !== "sell") {
+      throw new BotException(
+        "parser_002",
+        ExceptionName.InvalidOperationFormat,
+        ClientMessage.InvalidOperation
+      );
+    }
+    const price = parseFloat(headLineWords[2]);
+    if (!price) {
+      throw new BotException(
+        "parser_003",
+        ExceptionName.InvalidPriceFormat,
+        ClientMessage.InvalidPrice
+      );
+    }
+
+    const tps: Array<number> = [-1];
+    let sl: number = -1;
+
+    lines.forEach((line, index) => {
+      if (index === 0) return;
+      if (line.toLowerCase().includes("tp")) {
+        tps.push(getSLAndTPFromLine(line));
+      } else if (
+        line.toLowerCase().includes("sl") ||
+        line.toLowerCase().includes("stop")
+      ) {
+        sl = getSLAndTPFromLine(line);
+      } else {
+        throw new BotException(
+          "parser_004",
+          ExceptionName.InvalidSignalFormat,
+          ClientMessage.InvalidSignal
+        );
+      }
+    });
+    console.log(sl);
+    if (sl === -1) {
+      throw new BotException(
+        "parser_006",
+        ExceptionName.InvalidSignalFormat,
+        ClientMessage.InvalidSignal
+      );
+    }
+
+    ctx.reply(
+      `${formSummaryMessage(symbol, operation, price, tps, sl)}` +
+        `==========\n` +
+        `${formPropMessage()}` +
+        `==========\n` +
+        `${formPositionSizingMessage(symbol, price, sl, tps)}`
+    );
+    ratio = -1;
+  } catch (error) {
+    const errorMessage = error.getClientMessage();
+    const errorCode = error.getErrorCode();
+    ctx.reply(errorMessage + "\nError code: " + errorCode);
+    if (error.getType() === ExceptionName.InvalidSignalFormat) {
+      ctx.reply(formSignalCorrectFormatMessage());
+    }
+  }
 });
 
 function removeWhiteSpaces(message: string) {
@@ -116,18 +173,34 @@ function removeWhiteSpaces(message: string) {
 }
 
 function getSLAndTPFromLine(tpLine: string): number {
-  let tpLineWords: any[];
+  let lineWords: any[];
   if (tpLine.includes(":")) {
     tpLine = removeWhiteSpaces(tpLine);
-    tpLineWords = tpLine.split(":");
+    lineWords = tpLine.split(":");
   } else {
-    tpLineWords = tpLine.split(" ");
+    lineWords = tpLine.split(" ");
   }
 
-  if (tpLineWords[1].toLowerCase() === "open") {
+  if (lineWords.length !== 2) {
+    throw new BotException(
+      "parser_004",
+      ExceptionName.InvalidSignalFormat,
+      ClientMessage.InvalidSignal
+    );
+  }
+
+  if (lineWords[1].toLowerCase() === "open") {
     return -1;
   } else {
-    return parseFloat(tpLineWords[1]);
+    const value = parseFloat(lineWords[1]);
+    if (!value) {
+      throw new BotException(
+        "parser_005",
+        ExceptionName.InvalidTPOrSLFormat,
+        ClientMessage.InvalidTPOrSL
+      );
+    }
+    return value;
   }
 }
 
@@ -142,7 +215,7 @@ function formSummaryMessage(
     `Symbol: ${symbol.toUpperCase()}\n` +
     `Operation: ${operation.toUpperCase()}\n` +
     `Price: ${price}\n` +
-    `TP: ${tps.join(", ")}\n` +
+    `TP: ${tps.map((tp) => ((tp = -1) ? "Open" : tp)).join(", ")}\n` +
     `SL: ${sl === -1 ? "undefined" : sl}\n`
   );
 }
@@ -178,26 +251,46 @@ function formPositionSizingMessage(
         result =
           `Volume: <0.01\n` +
           `Minimum Risk: ${(risk / volume).toFixed(2)}%\n` +
-          `Max Profit: ${possibleProfit[0].toFixed(2)}$\n` +
+          `Max Profit: ${
+            possibleProfit[0] !== -1 ? possibleProfit[0].toFixed(2) + "$" : "-"
+          }\n` +
           `${
             possibleProfit[1]
-              ? "Max Profit 2: " + possibleProfit[1].toFixed(2) + "$"
+              ? "Max Profit 2: " + (possibleProfit[1] !== -1)
+                ? possibleProfit[1].toFixed(2) + "$"
+                : "-"
               : ""
           }\n`;
       } else {
         possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], volume);
         result =
           `Volume: ${volume.toFixed(3)}\n` +
-          `Max Profit: ${possibleProfit[0].toFixed(2)}$\n` +
+          `Max Profit: ${
+            possibleProfit[0] !== -1 ? possibleProfit[0].toFixed(2) + "$" : "-"
+          }\n` +
           `${
             possibleProfit[1]
-              ? "Max Profit 2: " + possibleProfit[1].toFixed(2) + "$"
+              ? "Max Profit 2: " + (possibleProfit[1] !== -1)
+                ? possibleProfit[1].toFixed(2) + "$"
+                : "-"
               : ""
           }\n`;
       }
     }
     return result;
   }
+}
+function formSignalCorrectFormatMessage(): string {
+  return (
+    "[SYMBOL] [OPERATION] [PRICE]\n" +
+    "tp [TAKE PROFIT]\n" +
+    "sl [STOP LOSS]\n\n" +
+    "========== OR ==========\n\n" +
+    "[SYMBOL] [OPERATION] [PRICE]\n" +
+    "tp1 [TAKE PROFIT 1]\n" +
+    "tp2 [TAKE PROFIT 2]\n" +
+    "sl [STOP LOSS]\n"
+  );
 }
 
 function getTradeVolume(symbol: string, price: number, sl: number): number {
@@ -222,6 +315,8 @@ function getPossibleProfit(
   tp: number,
   volume: number
 ): number {
+  if (tp === -1) return -1;
+
   const profitInPip = getDiffInPip(symbol, price, tp);
   const pipValueInSecondCurrency = getPipValuePerStandardLot(symbol);
   const conversionRatio = getConversionRatio("usd", symbol, price);
