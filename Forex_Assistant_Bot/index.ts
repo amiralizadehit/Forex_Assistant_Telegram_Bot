@@ -1,7 +1,21 @@
 import { Telegraf } from "telegraf";
-import { BotException, ClientMessage, ExceptionName } from "./error";
+import { BotException, ClientMessage, ExceptionName } from "./src/error";
 
-const bot = new Telegraf("1601399988:AAETMLNaYjX-ubOURdvF5IOUPg0yHMHseow");
+const token = process.env["TELEGRAM_BOT_TOKEN"];
+
+const webhookAddress = process.env["WEBHOOK_ADDRESS"];
+if (token === undefined) {
+  throw new Error("TELEGRAM_BOT_TOKEN must be provided!");
+}
+if (webhookAddress === undefined) {
+  throw new Error("WEBHOOK_ADDRESS must be provided!");
+}
+
+const bot = new Telegraf(token, {
+  telegram: { webhookReply: true },
+});
+
+bot.telegram.setWebhook(webhookAddress);
 
 /*
 bot.use((ctx, next)=>{
@@ -84,14 +98,15 @@ bot.command("risk", (ctx) => {
   }
 });
 // Signal Processing
+// @ts-ignore
 bot.on("text", (ctx) => {
   try {
     let lines = ctx.message.text.split("\n");
     lines = lines
-      .filter((line) => {
+      .filter((line: string) => {
         return line !== "";
       })
-      .map((line, index) => line.trim());
+      .map((line: string) => line.trim());
     //ctxObj = ctx;
 
     const headLineWords = lines[0].replace(/  +/g, " ").split(" ");
@@ -121,10 +136,10 @@ bot.on("text", (ctx) => {
       );
     }
 
-    const tps: Array<number> = [-1];
+    const tps: Array<number> = [];
     let sl: number = -1;
 
-    lines.forEach((line, index) => {
+    lines.forEach((line: string, index: number) => {
       if (index === 0) return;
       if (line.toLowerCase().includes("tp")) {
         tps.push(getSLAndTPFromLine(line));
@@ -141,13 +156,16 @@ bot.on("text", (ctx) => {
         );
       }
     });
-    console.log(sl);
     if (sl === -1) {
       throw new BotException(
         "parser_006",
         ExceptionName.InvalidSignalFormat,
         ClientMessage.InvalidSignal
       );
+    }
+    if (tps.length === 0) {
+      //if there is no tp specified, we make an open tp (-1) in the array.
+      tps[0] = -1;
     }
 
     ctx.reply(
@@ -215,7 +233,7 @@ function formSummaryMessage(
     `Symbol: ${symbol.toUpperCase()}\n` +
     `Operation: ${operation.toUpperCase()}\n` +
     `Price: ${price}\n` +
-    `TP: ${tps.map((tp) => ((tp = -1) ? "Open" : tp)).join(", ")}\n` +
+    `TP: ${tps.map((tp) => (tp === -1 ? "Open" : tp)).join(", ")}\n` +
     `SL: ${sl === -1 ? "undefined" : sl}\n`
   );
 }
@@ -243,11 +261,11 @@ function formPositionSizingMessage(
     if (volume === -1) {
       result = `Volume: Error - ${conversionSymbol} ratio is required`;
     } else {
-      possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], volume);
-      if (tps.length > 1)
-        possibleProfit[1] = getPossibleProfit(symbol, price, tps[1], volume);
-
       if (volume < 0.01) {
+        possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], 0.01);
+        if (tps.length > 1)
+          possibleProfit[1] = getPossibleProfit(symbol, price, tps[1], 0.01);
+
         result =
           `Volume: <0.01\n` +
           `Minimum Risk: ${(risk / volume).toFixed(2)}%\n` +
@@ -263,6 +281,9 @@ function formPositionSizingMessage(
           }\n`;
       } else {
         possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], volume);
+        if (tps.length > 1)
+          possibleProfit[1] = getPossibleProfit(symbol, price, tps[1], volume);
+
         result =
           `Volume: ${volume.toFixed(3)}\n` +
           `Max Profit: ${
