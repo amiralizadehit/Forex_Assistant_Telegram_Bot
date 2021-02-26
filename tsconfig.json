@@ -24,6 +24,6 @@
     "alwaysStrict": true
   },
   "exclude": [ "node_modules", "webpack", "./src/**/*.spec.ts" ],
-  "include": ["./src/**/*"],
+  "include": ["./Forex_Assistant_Bot/**/*"],
   "types": [ "typePatches" ]
 }
