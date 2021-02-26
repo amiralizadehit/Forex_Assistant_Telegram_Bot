@@ -1,9 +1,11 @@
 import { Telegraf } from "telegraf";
 import { BotException, ClientMessage, ExceptionName } from "./src/error";
+import axios from "axios";
 
 const token = process.env["TELEGRAM_BOT_TOKEN"];
-
 const webhookAddress = process.env["WEBHOOK_ADDRESS"];
+const exchangerKey = process.env["EXCHANGER_KEY"];
+
 if (token === undefined) {
   throw new Error("TELEGRAM_BOT_TOKEN must be provided!");
 }
@@ -99,7 +101,7 @@ bot.command("risk", (ctx) => {
 });
 // Signal Processing
 // @ts-ignore
-bot.on("text", (ctx) => {
+bot.on("text", async (ctx) => {
   try {
     let lines = ctx.message.text.split("\n");
     lines = lines
@@ -168,15 +170,32 @@ bot.on("text", (ctx) => {
       tps[0] = -1;
     }
 
+    const positionSizingMsg = await formPositionSizingMessage(
+      symbol,
+      price,
+      sl,
+      tps
+    );
+    const summaryMsg = formSummaryMessage(symbol, operation, price, tps, sl);
+    const propMsg = formPropMessage();
+
     ctx.reply(
-      `${formSummaryMessage(symbol, operation, price, tps, sl)}` +
+      `${summaryMsg}` +
         `==========\n` +
-        `${formPropMessage()}` +
+        `${propMsg}` +
         `==========\n` +
-        `${formPositionSizingMessage(symbol, price, sl, tps)}`
+        `${positionSizingMsg}`
     );
     ratio = -1;
   } catch (error) {
+    if (error.type === undefined) {
+      console.log(error);
+      error = new BotException(
+        "generic_001",
+        ExceptionName.GenericException,
+        ClientMessage.GenericException
+      );
+    }
     const errorMessage = error.getClientMessage();
     const errorCode = error.getErrorCode();
     ctx.reply(errorMessage + "\nError code: " + errorCode);
@@ -245,16 +264,16 @@ function formPropMessage(): string {
   );
 }
 
-function formPositionSizingMessage(
+async function formPositionSizingMessage(
   symbol: string,
   price: number,
   sl: number,
   tps: Array<number>
-): string {
+) {
   if (equity === -1 || risk === -1) {
     return `Volume: Error - Either equity or risk is not set`;
   } else {
-    let volume = getTradeVolume(symbol, price, sl);
+    let volume = await getTradeVolume(symbol, price, sl);
     let possibleProfit = [];
     let result: string;
     let conversionSymbol = "USD" + symbol.slice(3).toUpperCase();
@@ -262,9 +281,19 @@ function formPositionSizingMessage(
       result = `Volume: Error - ${conversionSymbol} ratio is required`;
     } else {
       if (volume < 0.01) {
-        possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], 0.01);
+        possibleProfit[0] = await getPossibleProfit(
+          symbol,
+          price,
+          tps[0],
+          0.01
+        );
         if (tps.length > 1)
-          possibleProfit[1] = getPossibleProfit(symbol, price, tps[1], 0.01);
+          possibleProfit[1] = await getPossibleProfit(
+            symbol,
+            price,
+            tps[1],
+            0.01
+          );
 
         result =
           `Volume: <0.01\n` +
@@ -280,9 +309,19 @@ function formPositionSizingMessage(
               : ""
           }\n`;
       } else {
-        possibleProfit[0] = getPossibleProfit(symbol, price, tps[0], volume);
+        possibleProfit[0] = await getPossibleProfit(
+          symbol,
+          price,
+          tps[0],
+          volume
+        );
         if (tps.length > 1)
-          possibleProfit[1] = getPossibleProfit(symbol, price, tps[1], volume);
+          possibleProfit[1] = await getPossibleProfit(
+            symbol,
+            price,
+            tps[1],
+            volume
+          );
 
         result =
           `Volume: ${volume.toFixed(3)}\n` +
@@ -314,13 +353,13 @@ function formSignalCorrectFormatMessage(): string {
   );
 }
 
-function getTradeVolume(symbol: string, price: number, sl: number): number {
+async function getTradeVolume(symbol: string, price: number, sl: number) {
   let pipDiff: number = getDiffInPip(symbol, price, sl);
   //ctxObj.reply("pip diff: " + pipDiff);
   let amountAtRisk: number = equity * risk;
   let pipValue: number;
   let pipValueInSecondCurrency = getPipValuePerStandardLot(symbol);
-  const conversionRatio = getConversionRatio("usd", symbol, price);
+  const conversionRatio = await getConversionRatio("usd", symbol, price);
 
   if (conversionRatio === -1) {
     //Ratio is not set
@@ -330,22 +369,22 @@ function getTradeVolume(symbol: string, price: number, sl: number): number {
   return amountAtRisk / (pipValue * pipDiff);
 }
 
-function getPossibleProfit(
+async function getPossibleProfit(
   symbol: string,
   price: number,
   tp: number,
   volume: number
-): number {
+) {
   if (tp === -1) return -1;
 
   const profitInPip = getDiffInPip(symbol, price, tp);
   const pipValueInSecondCurrency = getPipValuePerStandardLot(symbol);
-  const conversionRatio = getConversionRatio("usd", symbol, price);
+
+  const conversionRatio = await getConversionRatio("usd", symbol, price);
   if (conversionRatio === -1) {
     return -1;
   }
   const pipValue = pipValueInSecondCurrency * volume;
-
   return (profitInPip * pipValue) / conversionRatio;
 }
 
@@ -361,21 +400,27 @@ function getDiffInPip(symbol: string, price: number, target: number): number {
   return Math.abs(price - target) * Math.pow(10, digit);
 }
 
-function getConversionRatio(
+async function getConversionRatio(
   targetCurrency: string,
   symbol: string,
   price: number
 ) {
   if (symbol.includes(targetCurrency)) {
-    const usdIndex = symbol.indexOf(targetCurrency);
-    if (usdIndex === 0) {
+    const targetCurrencyIndex = symbol.indexOf(targetCurrency);
+    if (targetCurrencyIndex === 0) {
       return price;
-    } else if (usdIndex === 3) {
+    } else if (targetCurrencyIndex === 3) {
       return 1;
     }
   } else if (symbol.includes("gold")) {
     return 1;
   }
+
+  const toSymbol = symbol.slice(3);
+  const finalSymbol = (targetCurrency + "_" + toSymbol).toUpperCase();
+  const url = `https://free.currconv.com/api/v7/convert?q=${finalSymbol}&compact=ultra&apiKey=${exchangerKey}`;
+  const response = await axios.get(url);
+  ratio = parseFloat(response.data[finalSymbol]);
   return ratio;
 }
 
