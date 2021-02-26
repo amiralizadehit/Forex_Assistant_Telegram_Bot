@@ -5,6 +5,7 @@ enum ExceptionName {
   InvalidPriceFormat,
   InvalidTPOrSLFormat,
   InvalidSLFormat,
+  ExchangerNetworkException,
 }
 
 enum ClientMessage {
@@ -13,10 +14,11 @@ enum ClientMessage {
   InvalidOperation = "Sorry, the operation is not in the correct format. It should be either buy or sell.",
   InvalidPrice = "Sorry, the entry price is not in the correct format. It should be a positive number.",
   InvalidTPOrSL = "Sorry, either take profit or stop loss is not in the correct format. They should be positive numbers.",
+  EXCHANGER_NETWORK = "Sorry, we couldn't retrieve the exchange ratio for your base currency.",
 }
 
 class BotException extends Error {
-  private type: ExceptionName;
+  public type: ExceptionName;
   private clientMessage: string;
   private errorCode: string;
   constructor(
@@ -48,6 +50,9 @@ class BotException extends Error {
           break;
         case ExceptionName.InvalidTPOrSLFormat:
           this.clientMessage = ClientMessage.InvalidTPOrSL;
+          break;
+        case ExceptionName.ExchangerNetworkException:
+          this.clientMessage = ClientMessage.EXCHANGER_NETWORK;
           break;
         default:
           this.clientMessage = ClientMessage.GenericException;
